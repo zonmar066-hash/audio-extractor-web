@@ -30,6 +30,16 @@ class AudioExtractor {
         this.hasWebCodecs = typeof AudioEncoder !== 'undefined';
         console.log('Browser support - WebCodecs AudioEncoder:', this.hasWebCodecs);
         
+        // 更新浏览器支持提示
+        const supportDiv = document.getElementById('browserSupport');
+        if (supportDiv) {
+            if (this.hasWebCodecs) {
+                supportDiv.innerHTML = '<span class="supported">✓</span> 当前浏览器支持 AAC 编码（WebCodecs）';
+            } else {
+                supportDiv.innerHTML = '<span class="unsupported">✗</span> 当前浏览器不支持 AAC 编码，将输出 WAV 格式（需要 Chrome 94+ 或 Edge 94+）';
+            }
+        }
+        
         // 如果不支持 WebCodecs，禁用 AAC 选项
         if (!this.hasWebCodecs && this.formatSelect) {
             const aacOption = this.formatSelect.querySelector('option[value="aac"]');
