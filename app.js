@@ -464,7 +464,7 @@ class AudioExtractor {
             }
 
             const audioData = new AudioData({
-                format: 'planar-f32',
+                format: 'f32-planar',
                 sampleRate: sampleRate,
                 numberOfFrames: frameLen,
                 numberOfChannels: channels,
