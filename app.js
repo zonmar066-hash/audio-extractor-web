@@ -33,8 +33,8 @@ class AudioExtractor {
         this.loudnessSelect = document.getElementById('loudnessSelect');
         this.bitrateSelect = document.getElementById('bitrateSelect');
 
-        // Upload zone
-        this.uploadZone.addEventListener('click', () => this.fileInput.click());
+        // Upload zone - file input is now positioned absolutely over the zone
+        // No need for manual click() trigger
         this.uploadZone.addEventListener('dragover', (e) => {
             e.preventDefault();
             this.uploadZone.classList.add('dragover');
