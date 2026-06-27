@@ -374,6 +374,24 @@
         <div class="options-panel" id="optionsPanel" style="display:none">
             <h3>转换选项</h3>
             <div class="option-row">
+                <label>输出格式</label>
+                <select id="formatSelect">
+                    <option value="aac" selected>AAC (.m4a) - 体积小，推荐</option>
+                    <option value="wav">WAV - 无损，体积大</option>
+                </select>
+                <span class="hint">AAC 需要 Chrome/Edge 浏览器</span>
+            </div>
+            <div class="option-row">
+                <label>比特率</label>
+                <select id="bitrateSelect">
+                    <option value="96000">96 kbps (语音)</option>
+                    <option value="128000" selected>128 kbps (推荐)</option>
+                    <option value="192000">192 kbps (高品质)</option>
+                    <option value="256000">256 kbps (高保真)</option>
+                </select>
+                <span class="hint">仅 AAC 格式有效</span>
+            </div>
+            <div class="option-row">
                 <label>采样率</label>
                 <select id="sampleRateSelect">
                     <option value="0">原始采样率</option>
