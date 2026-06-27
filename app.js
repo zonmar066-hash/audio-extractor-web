@@ -36,6 +36,8 @@ class AudioExtractor {
         this.summary = document.getElementById('summary');
         this.sampleRateSelect = document.getElementById('sampleRateSelect');
         this.loudnessSelect = document.getElementById('loudnessSelect');
+        this.formatSelect = document.getElementById('formatSelect');
+        this.bitrateSelect = document.getElementById('bitrateSelect');
     }
 
     bindEvents() {
@@ -305,23 +307,28 @@ class AudioExtractor {
         fileObj.status = 'encoding';
         this.updateUI();
 
-        // 优先尝试 WebCodecs AAC，失败则回退到 WAV
+        const outputFormat = this.formatSelect.value;
+        const bitrate = parseInt(this.bitrateSelect.value);
         let outputBlob;
-        let outputExt = '.m4a';
-        
-        if (typeof AudioEncoder !== 'undefined') {
+
+        if (outputFormat === 'wav') {
+            // 用户选了 WAV
+            outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
+            fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
+        } else if (typeof AudioEncoder !== 'undefined') {
+            // 用户选了 AAC，且浏览器支持 WebCodecs
             try {
-                outputBlob = await this.encodeAAC(pcmBuffer, gain, onProgress);
+                outputBlob = await this.encodeAAC(pcmBuffer, gain, bitrate, onProgress);
+                fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.m4a';
             } catch (e) {
                 console.warn('AAC encoding failed, falling back to WAV:', e);
                 outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
-                outputExt = '.wav';
                 fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
             }
         } else {
+            // 用户选了 AAC 但浏览器不支持，降级 WAV
             console.log('WebCodecs not supported, using WAV');
             outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
-            outputExt = '.wav';
             fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
         }
 
@@ -382,7 +389,7 @@ class AudioExtractor {
         return totalSamples > 0 ? Math.sqrt(sumSquares / totalSamples) : 0;
     }
 
-    async encodeAAC(audioBuffer, gain, onProgress) {
+    async encodeAAC(audioBuffer, gain, bitrate, onProgress) {
         const sampleRate = audioBuffer.sampleRate;
         const channels = audioBuffer.numberOfChannels;
         const length = audioBuffer.length;
@@ -409,7 +416,7 @@ class AudioExtractor {
             codec: 'mp4a.40.2', // AAC-LC
             sampleRate: sampleRate,
             numberOfChannels: channels,
-            bitrate: 192000
+            bitrate: bitrate
         });
 
         // 分块编码
@@ -583,11 +590,11 @@ document.addEventListener('DOMContentLoaded', () => {
         checks.push('<span class="unsupported">✗ Web Audio API (必需)</span>');
     }
     
-    // WebCodecs (optional, for AAC)
+    // WebCodecs (for AAC)
     if (typeof AudioEncoder !== 'undefined') {
-        checks.push('<span class="supported">✓ WebCodecs (AAC输出)</span>');
+        checks.push('<span class="supported">✓ AAC 编码 (Chrome/Edge)</span>');
     } else {
-        checks.push('<span class="unsupported">⚠ WebCodecs (将输出WAV)</span>');
+        checks.push('<span class="unsupported">⚠ 不支持 AAC，仅 WAV (建议用 Chrome)</span>');
     }
     
     supportDiv.innerHTML = checks.join(' · ');
