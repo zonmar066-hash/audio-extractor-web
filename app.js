@@ -18,8 +18,28 @@ class AudioExtractor {
 
     init() {
         this.cacheElements();
+        this.checkBrowserSupport();
         this.bindEvents();
         this.updateUI();
+    }
+
+    /**
+     * 检查浏览器支持情况
+     */
+    checkBrowserSupport() {
+        this.hasWebCodecs = typeof AudioEncoder !== 'undefined';
+        console.log('Browser support - WebCodecs AudioEncoder:', this.hasWebCodecs);
+        
+        // 如果不支持 WebCodecs，禁用 AAC 选项
+        if (!this.hasWebCodecs && this.formatSelect) {
+            const aacOption = this.formatSelect.querySelector('option[value="aac"]');
+            if (aacOption) {
+                aacOption.disabled = true;
+                aacOption.textContent = 'AAC (.m4a) - 当前浏览器不支持';
+            }
+            // 强制切换到 WAV
+            this.formatSelect.value = 'wav';
+        }
     }
 
     cacheElements() {
@@ -315,19 +335,21 @@ class AudioExtractor {
             // 用户选了 WAV
             outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
             fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
-        } else if (typeof AudioEncoder !== 'undefined') {
+        } else if (this.hasWebCodecs) {
             // 用户选了 AAC，且浏览器支持 WebCodecs
             try {
                 outputBlob = await this.encodeAAC(pcmBuffer, gain, bitrate, onProgress);
                 fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.m4a';
             } catch (e) {
                 console.warn('AAC encoding failed, falling back to WAV:', e);
+                alert(`AAC 编码失败：${e.message}\n已降级为 WAV 格式`);
                 outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
                 fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
             }
         } else {
             // 用户选了 AAC 但浏览器不支持，降级 WAV
             console.log('WebCodecs not supported, using WAV');
+            alert('当前浏览器不支持 AAC 编码（需要 Chrome 94+ 或 Edge 94+），已自动切换为 WAV 格式');
             outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
             fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
         }
@@ -457,8 +479,15 @@ class AudioExtractor {
         encoder.close();
         onProgress(95);
 
+        console.log('AAC encoding complete, chunks:', chunks.length);
+        if (chunks.length === 0) {
+            throw new Error('编码器未输出任何数据');
+        }
+
         // 封装为 ADTS AAC
-        return this.buildADTS(chunks, sampleRate, channels);
+        const blob = this.buildADTS(chunks, sampleRate, channels);
+        console.log('ADTS blob created, size:', blob.size);
+        return blob;
     }
 
     buildADTS(chunks, sampleRate, channels) {
@@ -470,16 +499,18 @@ class AudioExtractor {
         const srIndex = sampleRateIndex[sampleRate] ?? 4;
         const channelConfig = channels;
 
+        console.log('Building ADTS, sampleRate:', sampleRate, 'channels:', channels, 'srIndex:', srIndex);
+
         const adtsFrames = [];
         for (const { chunk } of chunks) {
             const frameData = new Uint8Array(chunk.byteLength);
             chunk.copyTo(frameData);
-            
+
             const frameLen = frameData.length + 7;
             const header = new Uint8Array(7);
-            
-            header[0] = 0xFF;
-            header[1] = 0xF1;
+
+            header[0] = 0xFF;  // syncword
+            header[1] = 0xF1;  // syncword + MPEG-4 + no CRC
             header[2] = (0b01 << 6) | (srIndex << 2) | (0 << 1) | ((channelConfig >> 2) & 1);
             header[3] = ((channelConfig & 0x3) << 6) | ((frameLen >> 11) & 0x3);
             header[4] = (frameLen >> 3) & 0xFF;
@@ -493,6 +524,8 @@ class AudioExtractor {
         }
 
         const totalLen = adtsFrames.reduce((sum, f) => sum + f.length, 0);
+        console.log('ADTS frames:', adtsFrames.length, 'total size:', totalLen);
+
         const result = new Uint8Array(totalLen);
         let offset = 0;
         for (const frame of adtsFrames) {
@@ -500,7 +533,8 @@ class AudioExtractor {
             offset += frame.length;
         }
 
-        return new Blob([result], { type: 'audio/aac' });
+        // 使用 audio/mp4 MIME 类型，因为 .m4a 是 MP4 容器
+        return new Blob([result], { type: 'audio/mp4' });
     }
 
     async encodeWAV(audioBuffer, gain, onProgress) {
