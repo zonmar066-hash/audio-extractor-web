@@ -155,7 +155,7 @@ class AudioExtractor {
         
         let downloadHtml = '';
         if (f.outputUrl) {
-            downloadHtml = `<a href="${f.outputUrl}" download="${f.outputName}" class="download-link">下载</a>`;
+            downloadHtml = ` <a href="${f.outputUrl}" download="${f.outputName}" class="download-link">手动下载</a>`;
         }
 
         const removeBtn = !this.isConverting 
@@ -180,7 +180,7 @@ class AudioExtractor {
             'decoding': '解码中...',
             'analyzing': '分析响度...',
             'encoding': '编码中...',
-            'done': '✓ 完成',
+            'done': '✓ 已保存到下载文件夹',
             'error': '✗ 错误',
             'no-audio': '⚠ 无音频轨道'
         };
@@ -325,10 +325,33 @@ class AudioExtractor {
             fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
         }
 
-        // 7. 创建下载链接
+        // 7. 创建下载链接并自动下载
         fileObj.outputUrl = URL.createObjectURL(outputBlob);
         fileObj.status = 'done';
         this.updateUI();
+        
+        // 自动触发下载到本地文件夹
+        this.autoDownload(fileObj);
+    }
+
+    /**
+     * 自动触发文件下载
+     */
+    autoDownload(fileObj) {
+        try {
+            const a = document.createElement('a');
+            a.href = fileObj.outputUrl;
+            a.download = fileObj.outputName;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            // 延迟移除，确保下载开始
+            setTimeout(() => document.body.removeChild(a), 100);
+            console.log('Auto-download triggered:', fileObj.outputName);
+        } catch (e) {
+            console.warn('Auto-download failed (browser may block):', e);
+            // 降级：显示下载链接供手动点击
+        }
     }
 
     async resample(audioBuffer, targetSampleRate) {
