@@ -76,6 +76,14 @@
             margin-top: 6px;
         }
 
+        #fileInput {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+            width: 1px;
+            height: 1px;
+        }
+
         .file-list {
             margin-bottom: 24px;
         }
@@ -312,7 +320,7 @@
             <p>点击或拖放文件到此处</p>
             <div class="hint">支持 MP4、MKV、MOV、MP3、WAV、FLAC 等格式 · 可多选</div>
         </div>
-        <input type="file" id="fileInput" multiple accept="video/*,audio/*" style="display:none">
+        <input type="file" id="fileInput" multiple accept="video/*,audio/*">
 
         <div class="file-list" id="fileList"></div>
 
