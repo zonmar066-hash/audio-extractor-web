@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音频提取器 - MP4/MP3 转 AAC + 响度标准化</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1117;
+            color: #e4e4e7;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        header p {
+            color: #71717a;
+            font-size: 14px;
+        }
+
+        .upload-zone {
+            border: 2px dashed #3f3f46;
+            border-radius: 12px;
+            padding: 50px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 24px;
+            background: #18181b;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: #6366f1;
+            background: #1e1e24;
+        }
+
+        .upload-zone .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .upload-zone p {
+            color: #a1a1aa;
+            font-size: 15px;
+        }
+
+        .upload-zone .hint {
+            color: #52525b;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .file-list {
+            margin-bottom: 24px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            background: #18181b;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #27272a;
+            transition: border-color 0.2s;
+        }
+
+        .file-item.processing {
+            border-color: #f59e0b;
+        }
+
+        .file-item.done {
+            border-color: #22c55e;
+        }
+
+        .file-item.error {
+            border-color: #ef4444;
+        }
+
+        .file-item .file-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .file-item .file-name {
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-item .file-status {
+            font-size: 12px;
+            color: #71717a;
+            margin-top: 2px;
+        }
+
+        .file-item .file-status.processing { color: #f59e0b; }
+        .file-item .file-status.done { color: #22c55e; }
+        .file-item .file-status.error { color: #ef4444; }
+        .file-item .file-status.no-audio { color: #ef4444; }
+
+        .file-item .file-size {
+            font-size: 12px;
+            color: #52525b;
+            margin-right: 12px;
+            white-space: nowrap;
+        }
+
+        .file-item .remove-btn {
+            background: none;
+            border: none;
+            color: #52525b;
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 18px;
+            line-height: 1;
+            border-radius: 4px;
+        }
+
+        .file-item .remove-btn:hover {
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .options-panel {
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .options-panel h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #a1a1aa;
+        }
+
+        .option-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .option-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .option-row label {
+            font-size: 14px;
+            min-width: 100px;
+            color: #d4d4d8;
+        }
+
+        .option-row select,
+        .option-row input[type="number"] {
+            background: #0f1117;
+            border: 1px solid #3f3f46;
+            color: #e4e4e7;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .option-row select:focus,
+        .option-row input:focus {
+            border-color: #6366f1;
+        }
+
+        .option-row .hint {
+            font-size: 12px;
+            color: #52525b;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #27272a;
+            color: #d4d4d8;
+            border: 1px solid #3f3f46;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #3f3f46;
+        }
+
+        .progress-container {
+            margin-bottom: 24px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #27272a;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-bar .fill {
+            height: 100%;
+            background: linear-gradient(90deg, #6366f1, #a855f7);
+            transition: width 0.3s;
+            width: 0%;
+        }
+
+        .progress-text {
+            font-size: 13px;
+            color: #a1a1aa;
+            margin-top: 8px;
+            text-align: center;
+        }
+
+        .summary {
+            text-align: center;
+            font-size: 14px;
+            color: #71717a;
+            padding: 12px;
+        }
+
+        .summary .stat {
+            display: inline-block;
+            margin: 0 8px;
+        }
+
+        .summary .stat-done { color: #22c55e; }
+        .summary .stat-error { color: #ef4444; }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #52525b;
+            font-size: 14px;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            color: #3f3f46;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>音频提取器</h1>
+            <p>MP4/MP3 → AAC + 响度标准化 (-14 LUFS) · 浏览器本地处理，文件不上传</p>
+        </header>
+
+        <div class="upload-zone" id="uploadZone">
+            <div class="icon">📁</div>
+            <p>点击或拖放文件到此处</p>
+            <div class="hint">支持 MP4、MKV、MOV、MP3、WAV、FLAC 等格式 · 可多选</div>
+        </div>
+        <input type="file" id="fileInput" multiple accept="video/*,audio/*" style="display:none">
+
+        <div class="file-list" id="fileList"></div>
+
+        <div class="options-panel" id="optionsPanel" style="display:none">
+            <h3>转换选项</h3>
+            <div class="option-row">
+                <label>采样率</label>
+                <select id="sampleRateSelect">
+                    <option value="0">原始采样率</option>
+                    <option value="44100">44100 Hz</option>
+                    <option value="48000">48000 Hz</option>
+                    <option value="96000">96000 Hz</option>
+                </select>
+                <span class="hint">输出文件的采样率</span>
+            </div>
+            <div class="option-row">
+                <label>目标响度</label>
+                <select id="loudnessSelect">
+                    <option value="-14">-14 LUFS（推荐）</option>
+                    <option value="-16">-16 LUFS（播客）</option>
+                    <option value="-23">-23 LUFS（EBU R128）</option>
+                </select>
+                <span class="hint">EBU R128 响度标准化目标值</span>
+            </div>
+            <div class="option-row">
+                <label>比特率</label>
+                <select id="bitrateSelect">
+                    <option value="128000">128 kbps</option>
+                    <option value="192000" selected>192 kbps（推荐）</option>
+                    <option value="256000">256 kbps</option>
+                    <option value="320000">320 kbps</option>
+                </select>
+                <span class="hint">AAC 编码比特率</span>
+            </div>
+        </div>
+
+        <div class="actions" id="actions" style="display:none">
+            <button class="btn btn-primary" id="convertBtn">开始转换</button>
+            <button class="btn btn-secondary" id="clearBtn">清空列表</button>
+        </div>
+
+        <div class="progress-container" id="progressContainer" style="display:none">
+            <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+            <div class="progress-text" id="progressText"></div>
+        </div>
+
+        <div class="summary" id="summary"></div>
+
+        <footer>
+            纯浏览器本地处理 · Web Audio API · 零服务器依赖
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
