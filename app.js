@@ -1,23 +1,28 @@
 /**
- * 音频提取器 - Web 版
+ * 音频提取器 - Web 版 (重构版)
  * 
  * 技术方案：
- * - Web Audio API (AudioContext.decodeAudioData) 解码任意音频/视频文件 → PCM
- * - 两遍处理：Pass 1 计算 RMS → Pass 2 增益调整 + AAC 编码
- * - 输出：M4A (MP4 容器 + AAC 音轨)
- * - 纯浏览器本地处理，文件不上传服务器
+ * - Web Audio API 解码任意音频/视频 → PCM
+ * - 两遍处理：Pass 1 计算 RMS → Pass 2 增益调整 + 编码
+ * - 输出：WAV (无损) 或 AAC (WebCodecs 支持时)
+ * - 纯浏览器本地处理
  */
 
 class AudioExtractor {
     constructor() {
-        this.files = []; // {file, name, size, status, errorMessage, outputUrl}
+        this.files = [];
         this.isConverting = false;
         this.audioContext = null;
-        
-        this.initUI();
+        this.init();
     }
 
-    initUI() {
+    init() {
+        this.cacheElements();
+        this.bindEvents();
+        this.updateUI();
+    }
+
+    cacheElements() {
         this.uploadZone = document.getElementById('uploadZone');
         this.fileInput = document.getElementById('fileInput');
         this.fileList = document.getElementById('fileList');
@@ -31,137 +36,180 @@ class AudioExtractor {
         this.summary = document.getElementById('summary');
         this.sampleRateSelect = document.getElementById('sampleRateSelect');
         this.loudnessSelect = document.getElementById('loudnessSelect');
-        this.bitrateSelect = document.getElementById('bitrateSelect');
-
-        // Upload zone - file input is now positioned absolutely over the zone
-        // No need for manual click() trigger
-        this.uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            this.uploadZone.classList.add('dragover');
-        });
-        this.uploadZone.addEventListener('dragleave', () => {
-            this.uploadZone.classList.remove('dragover');
-        });
-        this.uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            this.uploadZone.classList.remove('dragover');
-            this.addFiles(e.dataTransfer.files);
-        });
-        this.fileInput.addEventListener('change', (e) => {
-            this.addFiles(e.target.files);
-            this.fileInput.value = ''; // reset for re-select
-        });
-
-        // Actions
-        this.convertBtn.addEventListener('click', () => this.startConversion());
-        this.clearBtn.addEventListener('click', () => this.clearAll());
     }
 
-    addFiles(fileList) {
-        const audioVideoTypes = /^video\/|^audio\//;
+    bindEvents() {
+        // 文件选择 - 使用捕获阶段确保触发
+        this.fileInput.addEventListener('change', (e) => {
+            console.log('File input change:', e.target.files?.length, 'files');
+            if (e.target.files?.length > 0) {
+                this.handleFiles(e.target.files);
+                // 重置以便再次选择相同文件
+                e.target.value = '';
+            }
+        }, true);
+
+        // 拖放
+        this.uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.uploadZone.classList.add('dragover');
+        });
+
+        this.uploadZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.uploadZone.classList.remove('dragover');
+        });
+
+        this.uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.uploadZone.classList.remove('dragover');
+            console.log('Drop:', e.dataTransfer.files?.length, 'files');
+            if (e.dataTransfer.files?.length > 0) {
+                this.handleFiles(e.dataTransfer.files);
+            }
+        });
+
+        // 按钮
+        this.convertBtn.addEventListener('click', () => this.startConversion());
+        this.clearBtn.addEventListener('click', () => this.clearFiles());
+    }
+
+    handleFiles(fileList) {
+        const supportedExts = /\.(mp3|mp4|m4a|m4v|mkv|mov|avi|webm|ogv|ogg|oga|wav|flac|aac|opus|weba)$/i;
+        
+        let added = 0;
         for (const file of fileList) {
-            if (!audioVideoTypes.test(file.type) && !/\.(mp4|mkv|mov|avi|mp3|wav|flac|aac|m4a|ogg|webm|opus)$/i.test(file.name)) {
+            // 优先用扩展名判断，MIME type 不可靠
+            const isSupported = supportedExts.test(file.name) || 
+                file.type.startsWith('audio/') || 
+                file.type.startsWith('video/');
+            
+            if (!isSupported) {
+                console.log('Skipping unsupported file:', file.name, file.type);
                 continue;
             }
+
             this.files.push({
-                file,
+                id: Date.now() + Math.random().toString(36).slice(2),
+                file: file,
                 name: file.name,
                 size: file.size,
                 status: 'pending',
                 errorMessage: null,
-                outputUrl: null
+                outputUrl: null,
+                outputName: file.name.replace(/\.[^.]+$/, '') + '_normalized.m4a'
             });
+            added++;
         }
-        this.render();
+
+        console.log('Added', added, 'files, total:', this.files.length);
+        this.updateUI();
     }
 
-    removeFile(index) {
+    removeFile(id) {
         if (this.isConverting) return;
-        const f = this.files[index];
-        if (f.outputUrl) URL.revokeObjectURL(f.outputUrl);
-        this.files.splice(index, 1);
-        this.render();
+        const idx = this.files.findIndex(f => f.id === id);
+        if (idx >= 0) {
+            if (this.files[idx].outputUrl) {
+                URL.revokeObjectURL(this.files[idx].outputUrl);
+            }
+            this.files.splice(idx, 1);
+            this.updateUI();
+        }
     }
 
-    clearAll() {
+    clearFiles() {
         if (this.isConverting) return;
         for (const f of this.files) {
             if (f.outputUrl) URL.revokeObjectURL(f.outputUrl);
         }
         this.files = [];
-        this.render();
+        this.updateUI();
     }
 
-    render() {
+    updateUI() {
         const hasFiles = this.files.length > 0;
+        
+        // 控制面板显示/隐藏
         this.optionsPanel.style.display = hasFiles ? 'block' : 'none';
         this.actions.style.display = hasFiles ? 'flex' : 'none';
-
+        
+        // 渲染文件列表
         if (!hasFiles) {
             this.fileList.innerHTML = '';
             this.summary.innerHTML = '';
             return;
         }
 
-        this.fileList.innerHTML = this.files.map((f, i) => {
-            const statusClass = f.status;
-            const statusText = this.getStatusText(f);
-            const sizeText = this.formatSize(f.size);
-            const downloadLink = f.outputUrl
-                ? `<a href="${f.outputUrl}" download="${f.name.replace(/\.[^.]+$/, '')}_aac.m4a" style="color:#6366f1;text-decoration:none;font-size:13px;margin-left:8px;">下载</a>`
-                : '';
-            return `
-                <div class="file-item ${statusClass}">
-                    <div class="file-info">
-                        <div class="file-name">${this.escape(f.name)}</div>
-                        <div class="file-status ${statusClass}">${statusText}${downloadLink}</div>
-                    </div>
-                    <div class="file-size">${sizeText}</div>
-                    ${!this.isConverting ? `<button class="remove-btn" onclick="app.removeFile(${i})">×</button>` : ''}
-                </div>
-            `;
-        }).join('');
-
+        this.fileList.innerHTML = this.files.map(f => this.renderFileItem(f)).join('');
         this.updateSummary();
     }
 
-    getStatusText(f) {
-        switch (f.status) {
-            case 'pending': return '等待中';
-            case 'checking': return '检测音频轨道...';
-            case 'no-audio': return '⚠ 无音频轨道，已跳过';
-            case 'processing': return '转换中...';
-            case 'done': return '✓ 完成';
-            case 'error': return '✗ 错误: ' + (f.errorMessage || '未知错误');
-            default: return '';
+    renderFileItem(f) {
+        const statusClass = f.status;
+        const statusText = this.getStatusText(f);
+        const sizeText = this.formatSize(f.size);
+        
+        let downloadHtml = '';
+        if (f.outputUrl) {
+            downloadHtml = `<a href="${f.outputUrl}" download="${f.outputName}" class="download-link">下载</a>`;
         }
+
+        const removeBtn = !this.isConverting 
+            ? `<button class="remove-btn" data-id="${f.id}">×</button>` 
+            : '';
+
+        return `
+            <div class="file-item ${statusClass}" data-id="${f.id}">
+                <div class="file-info">
+                    <div class="file-name">${this.escapeHtml(f.name)}</div>
+                    <div class="file-status ${statusClass}">${statusText}${downloadHtml}</div>
+                </div>
+                <div class="file-size">${sizeText}</div>
+                ${removeBtn}
+            </div>
+        `;
+    }
+
+    getStatusText(f) {
+        const map = {
+            'pending': '等待中',
+            'decoding': '解码中...',
+            'analyzing': '分析响度...',
+            'encoding': '编码中...',
+            'done': '✓ 完成',
+            'error': '✗ 错误',
+            'no-audio': '⚠ 无音频轨道'
+        };
+        return map[f.status] || f.status;
     }
 
     updateSummary() {
         const total = this.files.length;
         const done = this.files.filter(f => f.status === 'done').length;
-        const error = this.files.filter(f => f.status === 'error').length;
-        const noAudio = this.files.filter(f => f.status === 'no-audio').length;
+        const error = this.files.filter(f => f.status === 'error' || f.status === 'no-audio').length;
         const pending = this.files.filter(f => f.status === 'pending').length;
 
         let html = `共 ${total} 个文件`;
-        if (done > 0) html += ` <span class="stat stat-done">完成 ${done}</span>`;
-        if (error > 0) html += ` <span class="stat stat-error">错误 ${error}</span>`;
-        if (noAudio > 0) html += ` <span class="stat stat-error">无音频 ${noAudio}</span>`;
+        if (done > 0) html += ` <span class="stat done">完成 ${done}</span>`;
+        if (error > 0) html += ` <span class="stat error">失败 ${error}</span>`;
         if (pending > 0) html += ` <span class="stat">待处理 ${pending}</span>`;
         this.summary.innerHTML = html;
-    }
 
-    updateProgress(percent, text) {
-        this.progressFill.style.width = percent + '%';
-        this.progressText.textContent = text || `${Math.round(percent)}%`;
+        // 绑定删除按钮事件（因为 innerHTML 重建了）
+        this.fileList.querySelectorAll('.remove-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.removeFile(btn.dataset.id);
+            });
+        });
     }
 
     async startConversion() {
-        const pendingFiles = this.files
-            .map((f, i) => ({ file: f, index: i }))
-            .filter(({ file }) => file.status === 'pending' || file.status === 'error');
-
+        const pendingFiles = this.files.filter(f => f.status === 'pending');
         if (pendingFiles.length === 0) {
             alert('没有待处理的文件');
             return;
@@ -178,20 +226,23 @@ class AudioExtractor {
 
         const total = pendingFiles.length;
         for (let i = 0; i < total; i++) {
-            const { file, index } = pendingFiles[i];
-            const current = i + 1;
-            const baseProgress = (i / total) * 100;
-
-            this.updateProgress(baseProgress, `(${current}/${total}) ${file.name}`);
-            this.files[index].status = 'processing';
-            this.render();
+            const fileObj = pendingFiles[i];
+            const progress = (i / total) * 100;
+            this.updateProgress(progress, `(${i+1}/${total}) ${fileObj.name}`);
+            
+            fileObj.status = 'decoding';
+            this.updateUI();
 
             try {
-                await this.processFile(file, index, total, i, baseProgress);
+                await this.processFile(fileObj, (p) => {
+                    const overall = progress + (p / total) * 100;
+                    this.updateProgress(overall, `(${i+1}/${total}) ${fileObj.name} - ${Math.round(p)}%`);
+                });
             } catch (err) {
-                this.files[index].status = 'error';
-                this.files[index].errorMessage = err.message || '未知错误';
-                this.render();
+                console.error('Process error:', err);
+                fileObj.status = 'error';
+                fileObj.errorMessage = err.message;
+                this.updateUI();
             }
         }
 
@@ -199,242 +250,188 @@ class AudioExtractor {
         this.isConverting = false;
         this.convertBtn.disabled = false;
         this.clearBtn.disabled = false;
-        this.render();
+        this.updateUI();
     }
 
-    async processFile(fileObj, index, total, currentIndex, baseProgress) {
-        const file = fileObj.file;
+    async processFile(fileObj, onProgress) {
+        const { file } = fileObj;
 
-        // Step 1: 读取文件 → 解码为 AudioBuffer
+        // 1. 读取并解码
+        onProgress(5);
         const arrayBuffer = await file.arrayBuffer();
-
-        // 检测是否有音频轨道（decodeAudioData 会在无音频时抛异常）
+        
         let audioBuffer;
         try {
             audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer.slice(0));
         } catch (e) {
-            this.files[index].status = 'no-audio';
-            this.files[index].errorMessage = '无法解码音频（可能无音频轨道）';
-            this.render();
-            return;
+            throw new Error('无法解码音频（文件可能损坏或无音频轨道）');
         }
 
-        // Step 2: 计算目标采样率
-        const targetSampleRate = parseInt(this.sampleRateSelect.value) || audioBuffer.sampleRate;
-        const targetLoudness = parseFloat(this.loudnessSelect.value);
-        const bitrate = parseInt(this.bitrateSelect.value);
-
-        // Step 3: 如果需要重采样，通过 OfflineAudioContext 转换
-        let pcmBuffer = audioBuffer;
-        if (targetSampleRate !== audioBuffer.sampleRate) {
-            const progressPer = (100 / total) * 0.3; // resample = 30%
-            this.updateProgress(
-                baseProgress + progressPer,
-                `(${currentIndex + 1}/${total}) ${fileObj.name} - 重采样...`
-            );
-            pcmBuffer = await this.resample(audioBuffer, targetSampleRate);
-        }
-
-        // Step 4: 计算 RMS (Pass 1)
-        const progressPerRMS = (100 / total) * 0.2; // RMS = 20%
-        this.updateProgress(
-            baseProgress + progressPerRMS,
-            `(${currentIndex + 1}/${total}) ${fileObj.name} - 分析响度...`
-        );
-        const rms = this.calculateRMS(pcmBuffer);
-        
-        if (rms <= 0) {
+        if (audioBuffer.numberOfChannels === 0 || audioBuffer.length === 0) {
             throw new Error('音频数据为空');
         }
 
-        // Step 5: 计算增益
+        // 2. 参数
+        const targetSampleRate = parseInt(this.sampleRateSelect.value) || audioBuffer.sampleRate;
+        const targetLoudness = parseFloat(this.loudnessSelect.value);
+        
+        // 3. 重采样（如需要）
+        onProgress(15);
+        let pcmBuffer = audioBuffer;
+        if (targetSampleRate !== audioBuffer.sampleRate) {
+            fileObj.status = 'decoding';
+            this.updateUI();
+            pcmBuffer = await this.resample(audioBuffer, targetSampleRate);
+        }
+
+        // 4. 计算 RMS
+        onProgress(30);
+        fileObj.status = 'analyzing';
+        this.updateUI();
+        const rms = this.calculateRMS(pcmBuffer);
+        
+        if (rms <= 0.0001) {
+            throw new Error('音频音量太低或数据异常');
+        }
+
+        // 5. 计算增益
         const targetRms = Math.pow(10, (targetLoudness + 0.691) / 20);
         let gain = targetRms / rms;
         gain = Math.max(0.25, Math.min(4.0, gain)); // -12dB ~ +12dB
+        console.log('RMS:', rms, 'Target RMS:', targetRms, 'Gain:', gain);
 
-        // Step 6: 编码 AAC (Pass 2: 增益 + 编码)
-        const progressPerEncode = (100 / total) * 0.5; // encode = 50%
-        this.updateProgress(
-            baseProgress + progressPerEncode,
-            `(${currentIndex + 1}/${total}) ${fileObj.name} - 编码 AAC...`
-        );
+        // 6. 编码输出
+        onProgress(50);
+        fileObj.status = 'encoding';
+        this.updateUI();
 
-        const m4aBlob = await this.encodeAAC(pcmBuffer, gain, bitrate, (progress) => {
-            const overallProgress = baseProgress + progressPerEncode * progress;
-            this.updateProgress(
-                overallProgress,
-                `(${currentIndex + 1}/${total}) ${fileObj.name} - 编码 AAC... ${Math.round(progress * 100)}%`
-            );
-        });
+        // 优先尝试 WebCodecs AAC，失败则回退到 WAV
+        let outputBlob;
+        let outputExt = '.m4a';
+        
+        if (typeof AudioEncoder !== 'undefined') {
+            try {
+                outputBlob = await this.encodeAAC(pcmBuffer, gain, onProgress);
+            } catch (e) {
+                console.warn('AAC encoding failed, falling back to WAV:', e);
+                outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
+                outputExt = '.wav';
+                fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
+            }
+        } else {
+            console.log('WebCodecs not supported, using WAV');
+            outputBlob = await this.encodeWAV(pcmBuffer, gain, onProgress);
+            outputExt = '.wav';
+            fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.wav';
+        }
 
-        // Step 7: 创建下载链接
-        const outputUrl = URL.createObjectURL(m4aBlob);
-        this.files[index].status = 'done';
-        this.files[index].outputUrl = outputUrl;
-        this.render();
+        // 7. 创建下载链接
+        fileObj.outputUrl = URL.createObjectURL(outputBlob);
+        fileObj.status = 'done';
+        this.updateUI();
     }
 
-    /**
-     * 重采样（通过 OfflineAudioContext）
-     */
     async resample(audioBuffer, targetSampleRate) {
         const offlineCtx = new OfflineAudioContext(
             audioBuffer.numberOfChannels,
             Math.ceil(audioBuffer.duration * targetSampleRate),
             targetSampleRate
         );
-
         const source = offlineCtx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(offlineCtx.destination);
         source.start();
-
         return await offlineCtx.startRendering();
     }
 
-    /**
-     * 计算 RMS（全量遍历所有通道）
-     */
     calculateRMS(audioBuffer) {
-        const channels = audioBuffer.numberOfChannels;
-        const length = audioBuffer.length;
         let sumSquares = 0;
         let totalSamples = 0;
-
-        for (let ch = 0; ch < channels; ch++) {
+        
+        for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
             const data = audioBuffer.getChannelData(ch);
-            for (let i = 0; i < length; i++) {
+            for (let i = 0; i < data.length; i++) {
                 sumSquares += data[i] * data[i];
-                totalSamples++;
             }
+            totalSamples += data.length;
         }
-
+        
         return totalSamples > 0 ? Math.sqrt(sumSquares / totalSamples) : 0;
     }
 
-    /**
-     * 使用 Web Audio API + AudioWorklet 编码 AAC
-     * 
-     * 策略：用 OfflineAudioContext 应用增益，然后通过 MediaStreamDestination +
-     * MediaRecorder 录制为 WebM/Opus，最后转 M4A。
-     * 
-     * 但 MediaRecorder 不直接支持 AAC/M4A，所以改用 WAV 中间格式 + 
-     * 手动 M4A 封装，或者直接输出 WAV。
-     * 
-     * 实际方案：浏览器原生 AAC 编码通过 WebCodecs API (AudioEncoder)
-     * 如果 WebCodecs 不可用，降级输出 WAV。
-     */
-    async encodeAAC(audioBuffer, gain, bitrate, onProgress) {
-        // 检查 WebCodecs API
-        if ('AudioEncoder' in window) {
-            try {
-                return await this.encodeWithWebCodecs(audioBuffer, gain, bitrate, onProgress);
-            } catch (e) {
-                console.warn('WebCodecs AAC encoding failed, falling back to WAV:', e);
-            }
-        }
-
-        // 降级：输出 WAV（无损，但体积更大）
-        return this.encodeWAV(audioBuffer, gain, onProgress);
-    }
-
-    /**
-     * 使用 WebCodecs API 编码 AAC + 封装 M4A
-     */
-    async encodeWithWebCodecs(audioBuffer, gain, bitrate, onProgress) {
+    async encodeAAC(audioBuffer, gain, onProgress) {
         const sampleRate = audioBuffer.sampleRate;
         const channels = audioBuffer.numberOfChannels;
         const length = audioBuffer.length;
+        const chunkSize = 1024;
 
-        // 准备 PCM 数据（应用增益）
+        // 准备带增益的 PCM 数据
         const channelData = [];
         for (let ch = 0; ch < channels; ch++) {
             const original = audioBuffer.getChannelData(ch);
             const amplified = new Float32Array(length);
             for (let i = 0; i < length; i++) {
-                amplified[i] = Math.max(-1, Math.min(1, original[i] * gain)); // clip
+                amplified[i] = Math.max(-1, Math.min(1, original[i] * gain));
             }
             channelData.push(amplified);
         }
 
-        // 收集编码后的 AAC 帧
         const chunks = [];
-
-        // 配置 AAC 编码器
-        const codecString = 'mp4a.40.2'; // AAC-LC
         const encoder = new AudioEncoder({
-            output: (chunk, metadata) => {
-                chunks.push({ chunk, metadata });
-            },
-            error: (e) => console.error('Encoder error:', e)
+            output: (chunk, meta) => chunks.push({ chunk, meta }),
+            error: (e) => { throw new Error('Encoder error: ' + e.message); }
         });
 
         encoder.configure({
-            codec: codecString,
+            codec: 'mp4a.40.2', // AAC-LC
             sampleRate: sampleRate,
             numberOfChannels: channels,
-            bitrate: bitrate
+            bitrate: 192000
         });
 
-        // 分块送入编码器
-        const chunkSize = 1024;
-
+        // 分块编码
         for (let offset = 0; offset < length; offset += chunkSize) {
-            const frameLength = Math.min(chunkSize, length - offset);
-            const planarData = new Float32Array(frameLength * channels);
-
+            const frameLen = Math.min(chunkSize, length - offset);
+            
+            // 交错格式 (interleaved) 转平面格式 (planar)
+            const planarData = new Float32Array(frameLen * channels);
             for (let ch = 0; ch < channels; ch++) {
-                for (let i = 0; i < frameLength; i++) {
-                    planarData[ch * frameLength + i] = channelData[ch][offset + i];
+                for (let i = 0; i < frameLen; i++) {
+                    planarData[ch * frameLen + i] = channelData[ch][offset + i];
                 }
             }
 
             const audioData = new AudioData({
                 format: 'planar-f32',
                 sampleRate: sampleRate,
-                numberOfFrames: frameLength,
+                numberOfFrames: frameLen,
                 numberOfChannels: channels,
-                timestamp: Math.round((offset / sampleRate) * 1_000_000),
+                timestamp: Math.round((offset / sampleRate) * 1e6),
                 data: planarData
             });
 
             encoder.encode(audioData);
             audioData.close();
 
-            if (onProgress && offset % (chunkSize * 50) === 0) {
-                onProgress(offset / length);
-                // 让出主线程
+            // 进度更新
+            const progress = 50 + (offset / length) * 45;
+            onProgress(progress);
+            
+            // 让出主线程
+            if (offset % (chunkSize * 10) === 0) {
                 await new Promise(r => setTimeout(r, 0));
             }
         }
 
         await encoder.flush();
         encoder.close();
-        onProgress(1.0);
+        onProgress(95);
 
         // 封装为 ADTS AAC
-        return this.buildADTSBlob(chunks, sampleRate, channels);
+        return this.buildADTS(chunks, sampleRate, channels);
     }
 
-    /**
-     * 将 AAC chunks 封装为 ADTS 格式的 Blob
-     * 每个 AAC 帧加 7 字节 ADTS 头，输出 .aac 文件
-     */
-    buildADTSBlob(chunks, sampleRate, channels) {
-        // 收集所有 AAC 帧数据
-        const frames = [];
-        for (const { chunk } of chunks) {
-            const data = new Uint8Array(chunk.byteLength);
-            chunk.copyTo(data);
-            frames.push(data);
-        }
-
-    /**
-     * 构建 ADTS 帧（AAC with ADTS headers）
-     * 每个 AAC 帧加 7 字节 ADTS 头
-     */
-    buildADTS(frames, sampleRate, channels) {
-        // ADTS 采样率索引
+    buildADTS(chunks, sampleRate, channels) {
         const sampleRateIndex = {
             96000: 0, 88200: 1, 64000: 2, 48000: 3,
             44100: 4, 32000: 5, 24000: 6, 22050: 7,
@@ -443,129 +440,135 @@ class AudioExtractor {
         const srIndex = sampleRateIndex[sampleRate] ?? 4;
         const channelConfig = channels;
 
-        // 计算总大小
-        let totalFrames = frames.length;
-        const chunks = [];
-
-        for (const frameData of frames) {
-            const frameLen = frameData.length + 7; // ADTS header = 7 bytes
+        const adtsFrames = [];
+        for (const { chunk } of chunks) {
+            const frameData = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(frameData);
+            
+            const frameLen = frameData.length + 7;
             const header = new Uint8Array(7);
-
-            // ADTS fixed header
-            header[0] = 0xFF; // syncword
-            header[1] = 0xF1; // syncword + ID=0 + layer=0 + protection_absent=1
-            // header[2]: profile=01 (AAC-LC) + sampling_frequency_index(4 bits) + private + channel_config(3 bits)
+            
+            header[0] = 0xFF;
+            header[1] = 0xF1;
             header[2] = (0b01 << 6) | (srIndex << 2) | (0 << 1) | ((channelConfig >> 2) & 1);
-            // header[3]: channel_config(remaining 2 bits) + original_copy + home + copyright_id_bit + copyright_id_start + frame_length(2 bits)
-            header[3] = ((channelConfig & 0x3) << 6) | 0 | 0 | 0 | 0 | ((frameLen >> 11) & 0x3);
-            // header[4]: frame_length(11 bits)
+            header[3] = ((channelConfig & 0x3) << 6) | ((frameLen >> 11) & 0x3);
             header[4] = (frameLen >> 3) & 0xFF;
-            // header[5]: frame_length(3 bits) + buffer_fullness(5 bits)
             header[5] = ((frameLen & 0x7) << 5) | 0x1F;
-            // header[6]: buffer_fullness(6 bits) + number_of_raw_data_blocks(2 bits)
-            header[6] = 0xFC; // buffer_fullness=0x3FF (VBR), blocks=0
+            header[6] = 0xFC;
 
-            // 合并 header + frame data
             const adtsFrame = new Uint8Array(frameLen);
             adtsFrame.set(header, 0);
             adtsFrame.set(frameData, 7);
-            chunks.push(adtsFrame);
+            adtsFrames.push(adtsFrame);
         }
 
-        // 合并所有帧
-        const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+        const totalLen = adtsFrames.reduce((sum, f) => sum + f.length, 0);
         const result = new Uint8Array(totalLen);
         let offset = 0;
-        for (const c of chunks) {
-            result.set(c, offset);
-            offset += c.length;
+        for (const frame of adtsFrames) {
+            result.set(frame, offset);
+            offset += frame.length;
         }
 
-        return result;
+        return new Blob([result], { type: 'audio/aac' });
     }
 
-    /**
-     * 降级方案：输出 WAV 文件
-     */
     async encodeWAV(audioBuffer, gain, onProgress) {
-        const numChannels = audioBuffer.numberOfChannels;
+        const channels = audioBuffer.numberOfChannels;
         const sampleRate = audioBuffer.sampleRate;
         const length = audioBuffer.length;
-        const bytesPerSample = 2; // 16-bit PCM
-        const dataSize = length * numChannels * bytesPerSample;
+        const bytesPerSample = 2;
+        const dataSize = length * channels * bytesPerSample;
 
-        // WAV header (44 bytes)
         const buffer = new ArrayBuffer(44 + dataSize);
         const view = new DataView(buffer);
 
-        // RIFF header
-        writeString(view, 0, 'RIFF');
+        // WAV header
+        this.writeString(view, 0, 'RIFF');
         view.setUint32(4, 36 + dataSize, true);
-        writeString(view, 8, 'WAVE');
-
-        // fmt chunk
-        writeString(view, 12, 'fmt ');
-        view.setUint32(16, 16, true); // chunk size
-        view.setUint16(20, 1, true); // PCM format
-        view.setUint16(22, numChannels, true);
+        this.writeString(view, 8, 'WAVE');
+        this.writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // PCM
+        view.setUint16(22, channels, true);
         view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
-        view.setUint16(32, numChannels * bytesPerSample, true);
-        view.setUint16(34, 16, true); // bits per sample
-
-        // data chunk
-        writeString(view, 36, 'data');
+        view.setUint32(28, sampleRate * channels * bytesPerSample, true);
+        view.setUint16(32, channels * bytesPerSample, true);
+        view.setUint16(34, 16, true);
+        this.writeString(view, 36, 'data');
         view.setUint32(40, dataSize, true);
 
-        // 写入 PCM 数据（应用增益）
-        const channels = [];
-        for (let ch = 0; ch < numChannels; ch++) {
-            channels.push(audioBuffer.getChannelData(ch));
+        // PCM data with gain
+        const channelData = [];
+        for (let ch = 0; ch < channels; ch++) {
+            channelData.push(audioBuffer.getChannelData(ch));
         }
 
         let offset = 44;
-        const chunkSize = 8192;
         for (let i = 0; i < length; i++) {
-            for (let ch = 0; ch < numChannels; ch++) {
-                let sample = channels[ch][i] * gain;
-                sample = Math.max(-1, Math.min(1, sample)); // clip
+            for (let ch = 0; ch < channels; ch++) {
+                let sample = channelData[ch][i] * gain;
+                sample = Math.max(-1, Math.min(1, sample));
                 view.setInt16(offset, sample * 0x7FFF, true);
                 offset += 2;
             }
 
-            if (onProgress && i % chunkSize === 0) {
-                onProgress(i / length);
+            if (i % 8192 === 0) {
+                const progress = 50 + (i / length) * 45;
+                onProgress(progress);
                 await new Promise(r => setTimeout(r, 0));
             }
         }
 
-        onProgress(1.0);
+        onProgress(95);
         return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    writeString(view, offset, str) {
+        for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+        }
+    }
+
+    updateProgress(percent, text) {
+        this.progressFill.style.width = Math.min(100, percent) + '%';
+        this.progressText.textContent = text || `${Math.round(percent)}%`;
     }
 
     formatSize(bytes) {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    escape(str) {
+    escapeHtml(str) {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
     }
 }
 
-function writeString(view, offset, str) {
-    for (let i = 0; i < str.length; i++) {
-        view.setUint8(offset + i, str.charCodeAt(i));
-    }
-}
-
-// 全局实例
-let app;
-
+// Browser support check
 document.addEventListener('DOMContentLoaded', () => {
-    app = new AudioExtractor();
+    const supportDiv = document.getElementById('browserSupport');
+    const checks = [];
+    
+    // Web Audio API
+    if (window.AudioContext || window.webkitAudioContext) {
+        checks.push('<span class="supported">✓ Web Audio API</span>');
+    } else {
+        checks.push('<span class="unsupported">✗ Web Audio API (必需)</span>');
+    }
+    
+    // WebCodecs (optional, for AAC)
+    if (typeof AudioEncoder !== 'undefined') {
+        checks.push('<span class="supported">✓ WebCodecs (AAC输出)</span>');
+    } else {
+        checks.push('<span class="unsupported">⚠ WebCodecs (将输出WAV)</span>');
+    }
+    
+    supportDiv.innerHTML = checks.join(' · ');
+    
+    // Initialize app
+    window.app = new AudioExtractor();
 });
