@@ -349,7 +349,7 @@ class AudioExtractor {
             // 用户选了 AAC，且浏览器支持 WebCodecs
             try {
                 outputBlob = await this.encodeAAC(pcmBuffer, gain, bitrate, onProgress);
-                fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.m4a';
+                fileObj.outputName = fileObj.name.replace(/\.[^.]+$/, '') + '_normalized.aac';
             } catch (e) {
                 console.warn('AAC encoding failed, falling back to WAV:', e);
                 alert(`AAC 编码失败：${e.message}\n已降级为 WAV 格式`);
@@ -444,12 +444,22 @@ class AudioExtractor {
             error: (e) => { throw new Error('Encoder error: ' + e.message); }
         });
 
-        encoder.configure({
+        // 尝试 CBR 模式，如果不支持则降级到默认 VBR
+        const baseConfig = {
             codec: 'mp4a.40.2', // AAC-LC
             sampleRate: sampleRate,
             numberOfChannels: channels,
             bitrate: bitrate
-        });
+        };
+
+        try {
+            encoder.configure({ ...baseConfig, bitrateMode: "constant" });
+            console.log('AAC encoder configured: bitrate=' + bitrate + 'bps, mode=constant (CBR)');
+        } catch (e1) {
+            console.warn('CBR mode not supported, falling back to VBR:', e1.message);
+            encoder.configure(baseConfig);
+            console.log('AAC encoder configured: bitrate=' + bitrate + 'bps, mode=variable (VBR)');
+        }
 
         // 分块编码
         for (let offset = 0; offset < length; offset += chunkSize) {
@@ -493,6 +503,12 @@ class AudioExtractor {
         if (chunks.length === 0) {
             throw new Error('编码器未输出任何数据');
         }
+
+        // 计算实际比特率
+        const totalBytes = chunks.reduce((sum, c) => sum + c.chunk.byteLength, 0);
+        const durationSec = length / sampleRate;
+        const actualBitrate = Math.round((totalBytes * 8) / durationSec);
+        console.log('AAC output: ' + totalBytes + ' bytes, ' + durationSec.toFixed(2) + 's, actual bitrate ~' + actualBitrate + ' bps (target: ' + bitrate + ' bps)');
 
         // 封装为 ADTS AAC
         const blob = this.buildADTS(chunks, sampleRate, channels);
@@ -543,8 +559,8 @@ class AudioExtractor {
             offset += frame.length;
         }
 
-        // 使用 audio/mp4 MIME 类型，因为 .m4a 是 MP4 容器
-        return new Blob([result], { type: 'audio/mp4' });
+        // ADTS 裸流，MIME 类型应为 audio/aac（不是 audio/mp4）
+        return new Blob([result], { type: 'audio/aac' });
     }
 
     async encodeWAV(audioBuffer, gain, onProgress) {
